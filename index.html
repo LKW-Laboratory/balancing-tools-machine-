@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Talking Character – Balancing of Tools (with branding)</title>
+  <title>LFW Laboratory – Balancing of Tools</title>
   <script src="https://cdn.babylonjs.com/babylon.js"></script>
   <script src="https://cdn.babylonjs.com/loaders/babylon.glTF2FileLoader.js"></script>
   <style>
-    :root{ --lab-name: "Technische Hochschule Rosenheim"; --ui-bg: rgba(255,255,255,0.9); }
-    html, body { height:100%; margin:0; }
+    :root { --lab-name: "LFW Laboratory"; --ui-bg: rgba(255,255,255,0.9); }
+    html, body { height: 100%; margin: 0; }
     body {
       background-image: url("logo-th-rosenheim-2019-clipart-lg.png");
       background-repeat: no-repeat;
@@ -18,14 +18,21 @@
       overflow: hidden;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
     }
-    canvas { width:100%; height:100%; display:block; background: transparent; }
-    .toolbar { position:absolute; top:16px; left:16px; z-index:20; display:flex; align-items:center; gap:10px;
-      background: var(--ui-bg); padding:10px 12px; border-radius:12px; box-shadow:0 6px 18px rgba(0,0,0,.25); backdrop-filter: blur(6px);}
-    .btn { padding:10px 14px; border:none; border-radius:10px; background:#111; color:#fff; font-weight:600; cursor:pointer; }
-    .lab-name { margin-left:6px; padding:8px 10px; border-radius:8px; font-weight:700; color:#111; background: rgba(255,255,255,0.7); white-space:nowrap; }
-    .logo { position:absolute; top:16px; right:16px; z-index:20; height:48px; width:auto; object-fit:contain; filter: drop-shadow(0 6px 14px rgba(0,0,0,.35)); }
-    #hint { position:absolute; bottom:16px; left:16px; z-index:20; color:#fff; text-shadow:0 2px 6px rgba(0,0,0,.6); font-size:12px; background: rgba(0,0,0,.35); padding:6px 8px; border-radius:8px; }
-    #loading { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#fff; z-index:10; background: rgba(0,0,0,.4); font-weight:600; letter-spacing:.2px; }
+    canvas { width: 100%; height: 100%; display: block; background: transparent; }
+    .toolbar {
+      position: absolute; top: 16px; left: 16px; z-index: 20; display: flex; align-items: center; gap: 10px;
+      background: var(--ui-bg); padding: 10px 12px; border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,.25); backdrop-filter: blur(6px);
+    }
+    .btn { padding: 10px 14px; border: none; border-radius: 10px; background: #111; color: #fff; font-weight: 600; cursor: pointer; }
+    .lab-name { margin-left: 6px; padding: 8px 10px; border-radius: 8px; font-weight: 700; color: #111; background: rgba(255,255,255,0.7); white-space: nowrap; }
+    .logo { position: absolute; top:16px; right:16px; z-index:20; height:48px; width:auto; object-fit:contain; filter: drop-shadow(0 6px 14px rgba(0,0,0,.35)); }
+    #hint { position: absolute; bottom: 42px; left: 16px; z-index: 20; color: #fff; text-shadow: 0 2px 6px rgba(0,0,0,.6); font-size: 12px; background: rgba(0,0,0,.35); padding: 6px 8px; border-radius: 8px; }
+    #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; z-index: 10; background: rgba(0,0,0,.4); font-weight: 600; letter-spacing: .2px; }
+    .email-bar {
+      position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+      background: #fff; color: #000; padding: 8px 16px; border-radius: 10px;
+      font-weight: 600; font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,.3); z-index: 25;
+    }
   </style>
 </head>
 <body>
@@ -41,112 +48,186 @@
   <div id="hint">drag = orbit · wheel = zoom</div>
   <canvas id="renderCanvas"></canvas>
   <audio id="voice" src="Balancing of Tools machine audio.mp3" preload="auto"></audio>
+  <div class="email-bar">lfw@th-rosenheim.de</div>
 
   <script>
+    // ===== Config (keep filenames you’re using) =====
     const MODEL_FILE = "Balancing of Tools .glb";
     const AUDIO_FILE = "Balancing of Tools machine audio.mp3";
+    // Camera framing (close & slightly higher)
+    const CAMERA_BACKOFF = 1.25, BETA_DOWN_TILT = 0.10, CAM_HEIGHT_FACTOR = 0.22, YAW_OFFSET = Math.PI/2;
+    const DEBUG_LIST_GROUPS = false; // set true to log all animation groups in console
 
-    const CAMERA_BACKOFF = 1.75;
-    const BETA_DOWN_TILT = 0.10;
-    const CAM_HEIGHT_FACTOR = 0.22;
-    const YAW_OFFSET = Math.PI/2;
-
+    // UI / audio setup
     const lab = document.getElementById('labName');
-    const cssName = getComputedStyle(document.documentElement).getPropertyValue('--lab-name').trim().replace(/^"|"$/g,'');
-    lab.textContent = cssName || "Your Lab Name";
-
+    lab.textContent = (getComputedStyle(document.documentElement).getPropertyValue('--lab-name') || "LFW Laboratory").replace(/^"|"$/g,'');
     const canvas = document.getElementById("renderCanvas");
     const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer:true, stencil:true, doNotHandleContextLost:true, alpha:true });
-    const audio = document.getElementById("voice"); audio.src = AUDIO_FILE;
+    const audioEl = document.getElementById("voice"); audioEl.src = AUDIO_FILE;
 
     let scene, root, idleGroup=null, talkGroups=[];
+    // audio-reactive fallback
+    let audioCtx, analyser, dataArr, rafLip=null, mouthMorphTargets=[], jawBone=null, jawBaseX=0;
 
+    // --- utils ---
     function stopAllAnimations(sc){ (sc.animationGroups||[]).forEach(g=>{ try{ g.stop(); }catch(e){} }); sc.stopAllAnimations(); }
     function normalizeUpAxis(mesh){
-      const bb = mesh.getHierarchyBoundingVectors(true);
-      const sz = bb.max.subtract(bb.min);
+      const bb=mesh.getHierarchyBoundingVectors(true), sz=bb.max.subtract(bb.min);
       if (sz.z > sz.y * 1.5) mesh.rotate(BABYLON.Axis.X, Math.PI/2, BABYLON.Space.LOCAL);
-      const bb2 = mesh.getHierarchyBoundingVectors(true);
+      const bb2=mesh.getHierarchyBoundingVectors(true);
       if (bb2.max.y < 0) mesh.rotate(BABYLON.Axis.Z, Math.PI, BABYLON.Space.LOCAL);
     }
     function chooseFrontAndOffset(mesh){
-      const candidates=[0,Math.PI/2,Math.PI,3*Math.PI/2];
-      let best=0,bestDepth=Infinity;
-      for(const a of candidates){
-        mesh.rotation.y=a;
-        const bb=mesh.getHierarchyBoundingVectors(true);
-        const depth=bb.max.z-bb.min.z;
-        if(depth<bestDepth){ bestDepth=depth; best=a; }
-      }
-      mesh.rotation.y = best + YAW_OFFSET;
-      return mesh.rotation.y;
+      const c=[0,Math.PI/2,Math.PI,3*Math.PI/2]; let best=0,depth=Infinity;
+      for (const a of c){ mesh.rotation.y=a; const bb=mesh.getHierarchyBoundingVectors(true); const d=bb.max.z-bb.min.z; if (d<depth){ depth=d; best=a; } }
+      return (mesh.rotation.y = best + YAW_OFFSET);
     }
     function centerAndScale(mesh){
-      const bb=mesh.getHierarchyBoundingVectors(true);
-      const c=bb.min.add(bb.max).scale(0.5);
+      const bb=mesh.getHierarchyBoundingVectors(true), c=bb.min.add(bb.max).scale(0.5);
       mesh.position=mesh.position.subtract(c);
-      const size=bb.max.subtract(bb.min);
-      const maxDim=Math.max(size.x,size.y,size.z);
-      if(maxDim>0){
-        const s=2.0/maxDim;
-        mesh.scaling=new BABYLON.Vector3(s,s,s);
-      }
+      const size=bb.max.subtract(bb.min), maxDim=Math.max(size.x,size.y,size.z);
+      if (maxDim>0){ const s=2.0/maxDim; mesh.scaling=new BABYLON.Vector3(s,s,s); }
     }
     function placeCameraFromFacing(camera, mesh, facingAngle){
-      const bb=mesh.getHierarchyBoundingVectors(true);
-      const center=bb.min.add(bb.max).scale(0.5);
-      const size=bb.max.subtract(bb.min);
-      const maxDim=Math.max(size.x,size.y,size.z);
-      const forwardLocal=new BABYLON.Vector3(0,0,1);
-      const forward=BABYLON.Vector3.TransformNormal(forwardLocal,BABYLON.Matrix.RotationY(facingAngle));
-      const dist=Math.max(2.0,maxDim*CAMERA_BACKOFF);
-      const camPos=center.subtract(forward.scale(dist));
-      camPos.y=center.y+maxDim*CAM_HEIGHT_FACTOR;
-      camera.setTarget(center);
-      camera.setPosition(camPos);
-      camera.alpha=Math.atan2(-forward.x,-forward.z);
-      camera.beta=Math.PI/2-BETA_DOWN_TILT;
-      camera.lowerBetaLimit=Math.PI/2-0.45;
-      camera.upperBetaLimit=Math.PI/2+0.35;
-      camera.lowerRadiusLimit=maxDim*0.7;
-      camera.upperRadiusLimit=maxDim*5;
+      const bb=mesh.getHierarchyBoundingVectors(true), center=bb.min.add(bb.max).scale(0.5), size=bb.max.subtract(bb.min), maxDim=Math.max(size.x,size.y,size.z);
+      const forward=BABYLON.Vector3.TransformNormal(new BABYLON.Vector3(0,0,1), BABYLON.Matrix.RotationY(facingAngle));
+      const dist=Math.max(2.0, maxDim*CAMERA_BACKOFF), camPos=center.subtract(forward.scale(dist)); camPos.y=center.y+maxDim*CAM_HEIGHT_FACTOR;
+      camera.setTarget(center); camera.setPosition(camPos); camera.alpha=Math.atan2(-forward.x,-forward.z); camera.beta=Math.PI/2-BETA_DOWN_TILT;
+    }
+
+    // --- robust animation detection ---
+    function detectAnimationGroups(){
+      const groups = scene.animationGroups || [];
+      if (DEBUG_LIST_GROUPS) console.table(groups.map(g=>({name:g.name, from:g.from, to:g.to, loop:g.loopAnimation})));
+
+      const has=(g,keys)=>keys.some(k=>g.name.toLowerCase().includes(k));
+      const idleCandidates  = groups.filter(g => has(g,["idle","stand","breath","breathe","rest"]));
+      const visemeCandidates= groups.filter(g => has(g,["wolf3d","viseme","phoneme","lip","mouth","talk","speak"]));
+
+      idleGroup = idleCandidates.sort((a,b)=>(b.to-b.from)-(a.to-a.from))[0] || null;
+
+      talkGroups = visemeCandidates;
+      if (!talkGroups.length){
+        // fall back to "all except obvious utility/eye" (keeps mouth if merged)
+        talkGroups = groups.filter(g=>{
+          const n=g.name.toLowerCase();
+          if (idleGroup && g === idleGroup) return false;
+          if (n.includes("look") || n.includes("blink") || n.includes("eye")) return false;
+          return true;
+        });
+      }
+    }
+
+    // --- audio-reactive fallback (morph targets / jaw bone) ---
+    function collectMouthControls(){
+      mouthMorphTargets=[]; jawBone=null;
+      if (scene.morphTargetManagers){
+        const want=["jaw","mouth","lip","viseme","aa","ah","oh","ee","ih","uh","open"];
+        for (const mtm of scene.morphTargetManagers){
+          for (let i=0;i<mtm.numTargets;i++){
+            const mt=mtm.getTarget(i); const n=(mt.name||"").toLowerCase();
+            if (want.some(w=>n.includes(w))) mouthMorphTargets.push(mt);
+          }
+        }
+        mouthMorphTargets.sort((a,b)=>((b.name||"").toLowerCase().includes("jawopen")?1:0)-((a.name||"").toLowerCase().includes("jawopen")?1:0));
+      }
+      if (scene.skeletons && scene.skeletons.length){
+        const sk=scene.skeletons[0];
+        jawBone = sk.bones.find(b=>{ const n=b.name.toLowerCase(); return n.includes("jaw")||n.includes("chin")||n.includes("mouth"); }) || null;
+        if (jawBone) jawBaseX = jawBone.rotation.x || 0;
+      }
+    }
+    function ensureAnalyser(){
+      if (audioCtx) return true;
+      try{
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const src = audioCtx.createMediaElementSource(audioEl);
+        analyser = audioCtx.createAnalyser(); analyser.fftSize=1024;
+        dataArr = new Uint8Array(analyser.fftSize);
+        src.connect(analyser); analyser.connect(audioCtx.destination);
+        return true;
+      }catch(e){ console.warn("Analyser init failed", e); return false; }
+    }
+    function startAudioReactiveMouth(){
+      if (!ensureAnalyser()) return;
+      let last=0, smooth=0.7;
+      const loop=()=>{
+        analyser.getByteTimeDomainData(dataArr);
+        let sum=0; for (let i=0;i<dataArr.length;i++){ const v=(dataArr[i]-128)/128; sum+=v*v; }
+        let rms=Math.sqrt(sum/dataArr.length); let val=Math.min(1, Math.max(0, (rms-0.02)*8));
+        val = last*smooth + val*(1-smooth); last=val;
+        for (const mt of mouthMorphTargets){ try{ mt.influence = val; }catch(e){} }
+        if (jawBone){ const max=0.35; jawBone.rotation.x = jawBaseX + val*max; }
+        rafLip = requestAnimationFrame(loop);
+      };
+      cancelAnimationFrame(rafLip); rafLip=requestAnimationFrame(loop);
+    }
+    function stopAudioReactiveMouth(){
+      cancelAnimationFrame(rafLip); rafLip=null;
+      for (const mt of mouthMorphTargets){ try{ mt.influence=0; }catch(e){} }
+      if (jawBone) jawBone.rotation.x = jawBaseX || 0;
     }
 
     async function createScene(){
-      scene=new BABYLON.Scene(engine);
-      scene.clearColor=new BABYLON.Color4(0,0,0,0);
-      const camera=new BABYLON.ArcRotateCamera("camera",0,Math.PI/2,3.0,BABYLON.Vector3.Zero(),scene);
-      camera.attachControl(canvas,true);
-      const light=new BABYLON.HemisphericLight("hemi",new BABYLON.Vector3(0,1,0),scene);
-      light.intensity=1.25;
-      const result=await BABYLON.SceneLoader.ImportMeshAsync("","./","Balancing of Tools .glb",scene);
-      root=result.meshes[0];
-      result.meshes.forEach(m=>{ if(m.rotationQuaternion) m.rotationQuaternion=null; });
+      scene = new BABYLON.Scene(engine); scene.clearColor = new BABYLON.Color4(0,0,0,0);
+      const camera = new BABYLON.ArcRotateCamera("camera", 0, Math.PI/2, 3.0, BABYLON.Vector3.Zero(), scene);
+      camera.attachControl(canvas, true);
+      new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0,1,0), scene).intensity = 1.25;
+
+      const result = await BABYLON.SceneLoader.ImportMeshAsync("", "./", MODEL_FILE, scene);
+      root = result.meshes[0]; result.meshes.forEach(m=>{ if (m.rotationQuaternion) m.rotationQuaternion=null; });
+
       normalizeUpAxis(root);
       stopAllAnimations(scene);
-      const facing=chooseFrontAndOffset(root);
+      const facing = chooseFrontAndOffset(root);
       centerAndScale(root);
-      placeCameraFromFacing(camera,root,facing);
-      const groups=scene.animationGroups||[];
-      const has=(g,arr)=>arr.some(w=>g.name.toLowerCase().includes(w));
-      idleGroup=groups.find(g=>has(g,["idle","stand","breath","breathe","rest"]));
-      talkGroups=groups.filter(g=>has(g,["wolf3d","viseme","lip","phoneme","talk","speak","mouth"]));
-      if(talkGroups.length===0) talkGroups=groups.filter(g=>g!==idleGroup);
-      if(idleGroup) idleGroup.start(true,1.0,idleGroup.from,idleGroup.to,true);
-      document.getElementById("loading").style.display="none";
+      placeCameraFromFacing(camera, root, facing);
+
+      detectAnimationGroups();
+      collectMouthControls();
+
+      if (idleGroup) idleGroup.start(true, 1.0, idleGroup.from, idleGroup.to, true);
+      document.getElementById("loading").style.display = "none";
       return scene;
     }
-    createScene().then(()=>engine.runRenderLoop(()=>scene&&scene.render()));
-    window.addEventListener("resize",()=>engine.resize());
+    createScene().then(()=>engine.runRenderLoop(()=>scene && scene.render()));
+    window.addEventListener("resize", ()=>engine.resize());
 
-    const playBtn=document.getElementById("audioButton");
-    const muteBtn=document.getElementById("muteButton");
-    function startTalking(){ if(idleGroup) idleGroup.stop(); talkGroups.forEach(g=>{ try{ g.stop(); }catch(e){} g.start(false,1.0,g.from,g.to,false); }); }
-    function stopTalking(){ talkGroups.forEach(g=>g.stop()); if(idleGroup) idleGroup.start(true,1.0,idleGroup.from,idleGroup.to,true); }
-    playBtn.addEventListener("click", async ()=>{ try{ audio.currentTime=0; await audio.play(); }catch(e){ console.warn(e); } startTalking(); });
-    audio.addEventListener("ended", stopTalking);
+    // Buttons & lip control
+    const playBtn=document.getElementById("audioButton"), muteBtn=document.getElementById("muteButton");
+
+    function startTalking(){
+      const idleLooksLikeMouth = idleGroup && /viseme|lip|phoneme|mouth|talk|speak/i.test(idleGroup.name);
+      if (!idleLooksLikeMouth && idleGroup) idleGroup.stop();
+
+      const groupsToRun = talkGroups.length ? talkGroups : (scene.animationGroups||[]).filter(g=>g!==idleGroup);
+      if (groupsToRun.length){
+        groupsToRun.forEach(g=>{ try{ g.stop(); }catch(e){} g.start(false, 1.0, g.from, g.to, false); });
+      }else{
+        startAudioReactiveMouth();
+      }
+    }
+    function stopTalking(){
+      const groupsToRun = talkGroups.length ? talkGroups : (scene.animationGroups||[]).filter(g=>g!==idleGroup);
+      groupsToRun.forEach(g=>{ try{ g.stop(); }catch(e){} });
+      stopAudioReactiveMouth();
+      if (idleGroup) idleGroup.start(true, 1.0, idleGroup.from, idleGroup.to, true);
+    }
+
+    playBtn.addEventListener("click", async ()=>{
+      try{
+        if (!audioCtx || audioCtx.state === "suspended") { try{ audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)(); await audioCtx.resume(); }catch(e){} }
+        audioEl.currentTime = 0; await audioEl.play();
+      }catch(e){ console.warn(e); }
+      startTalking();
+    });
+    audioEl.addEventListener("ended", stopTalking);
+
     let muted=false;
-    muteBtn.addEventListener("click",()=>{ muted=!muted; audio.muted=muted; muteBtn.textContent=muted?"🔇 Unmute":"🔈 Mute"; });
+    muteBtn.addEventListener("click", async ()=>{
+      muted=!muted; audioEl.muted=muted; if (audioCtx && audioCtx.state==="suspended") try{ await audioCtx.resume(); }catch(e){}
+      muteBtn.textContent = muted ? "🔇 Unmute" : "🔈 Mute";
+    });
   </script>
 </body>
 </html>
